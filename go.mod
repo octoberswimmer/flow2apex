@@ -2,11 +2,11 @@ module github.com/octoberswimmer/flow2apex
 
 go 1.25.5
 
-require github.com/octoberswimmer/aer v0.0.90
+require github.com/octoberswimmer/aer v0.0.94
 
 require (
 	github.com/ForceCLI/force v1.4.3 // indirect
-	github.com/ForceCLI/force-md v0.33.0 // indirect
+	github.com/ForceCLI/force-md v0.34.1 // indirect
 	github.com/ForceCLI/inflect v0.0.0-20130829110746-cc00b5ad7a6a // indirect
 	github.com/ViViDboarder/gotifier v0.0.0-20140619195515-0f19f3d7c54c // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
@@ -23,7 +23,7 @@ require (
 	github.com/spf13/cobra v1.10.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 )
