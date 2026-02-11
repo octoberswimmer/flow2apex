@@ -557,7 +557,7 @@ func diffSideBySide(workspace, flowPath, baseDir, headDir string) (int, string, 
 		}
 
 		diffText = rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir)
-		diffText = removeSideBySideCommandHeaders(diffText)
+		diffText = normalizeSideBySideCommandHeaders(diffText)
 		return diffExit, diffText, nil
 	}
 
@@ -605,7 +605,7 @@ func sideBySideOptionUnsupported(stderrText string) bool {
 		strings.Contains(lower, "unknown option")
 }
 
-func removeSideBySideCommandHeaders(diffText string) string {
+func normalizeSideBySideCommandHeaders(diffText string) string {
 	if diffText == "" {
 		return diffText
 	}
@@ -613,11 +613,31 @@ func removeSideBySideCommandHeaders(diffText string) string {
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if strings.HasPrefix(line, "diff --recursive --side-by-side ") {
+			header := simplifySideBySideCommandHeader(line)
+			if header != "" {
+				if len(out) > 0 && out[len(out)-1] != "" {
+					out = append(out, "")
+				}
+				out = append(out, header)
+			}
 			continue
 		}
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n")
+}
+
+func simplifySideBySideCommandHeader(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return ""
+	}
+	left := fields[len(fields)-2]
+	right := fields[len(fields)-1]
+	if left == "" || right == "" {
+		return ""
+	}
+	return "diff -- " + left + " " + right
 }
 
 func formatSideBySideDiffHTML(diffText string) string {
@@ -705,6 +725,10 @@ func suppressCommonSideBySideDiffLines(diffText string) string {
 	lines := strings.Split(diffText, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
+		if strings.HasPrefix(line, "diff -- ") {
+			out = append(out, line)
+			continue
+		}
 		if _, _, ok := findSideBySideMarker(line); ok {
 			out = append(out, line)
 		}

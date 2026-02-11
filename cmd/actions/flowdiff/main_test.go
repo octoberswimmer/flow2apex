@@ -47,11 +47,32 @@ func TestSuppressCommonSideBySideDiffLines(t *testing.T) {
 	b[mid+1] = ' '
 	changed = string(b)
 
-	got := suppressCommonSideBySideDiffLines(common + "\n" + changed + "\n")
+	header := "diff -- a/flow/meta.xml/generated-1.apex b/flow/meta.xml/generated-1.apex"
+	got := suppressCommonSideBySideDiffLines(header + "\n" + common + "\n" + changed + "\n")
+	if !strings.Contains(got, header) {
+		t.Fatalf("expected diff header to be retained")
+	}
 	if strings.Contains(got, common) {
 		t.Fatalf("expected common line to be removed")
 	}
 	if !strings.Contains(got, changed) {
 		t.Fatalf("expected changed line to be retained")
+	}
+}
+
+func TestNormalizeSideBySideCommandHeaders(t *testing.T) {
+	input := strings.Join([]string{
+		"diff --recursive --side-by-side --new-file --width=200 --tabsize=3 --expand-tabs a/flow/meta.xml/one.apex b/flow/meta.xml/one.apex",
+		"left line | right line",
+		"diff --recursive --side-by-side --new-file --width=200 --tabsize=3 --expand-tabs a/flow/meta.xml/two.apex b/flow/meta.xml/two.apex",
+		"left line 2 | right line 2",
+	}, "\n")
+
+	got := normalizeSideBySideCommandHeaders(input)
+	if !strings.Contains(got, "diff -- a/flow/meta.xml/one.apex b/flow/meta.xml/one.apex") {
+		t.Fatalf("expected first simplified diff header")
+	}
+	if !strings.Contains(got, "diff -- a/flow/meta.xml/two.apex b/flow/meta.xml/two.apex") {
+		t.Fatalf("expected second simplified diff header")
 	}
 }
