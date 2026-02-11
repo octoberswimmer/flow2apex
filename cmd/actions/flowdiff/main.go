@@ -480,8 +480,8 @@ func startSideBySideHTMLReport(baseSHA, headSHA string) string {
 		"      h2 { margin: 24px 0 8px 0; font-size: 16px; }\n" +
 		"      p { margin: 0 0 12px 0; font-size: 13px; }\n" +
 		"      code { background: #f6f8fa; border-radius: 4px; padding: 1px 4px; }\n" +
-		"      pre.sbs { margin: 0 0 16px 0; padding: 12px; overflow-x: auto; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; line-height: 1.35; }\n" +
-		"      .sbs-scale { display: inline-block; min-width: 100%; transform-origin: left top; }\n" +
+		"      pre.sbs { margin: 0 0 16px 0; padding: 12px; overflow-x: auto; overflow-y: hidden; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; line-height: 1.35; }\n" +
+		"      .sbs-scale { display: block; width: max-content; min-width: 100%; transform-origin: left top; }\n" +
 		"      .left { color: #cf222e; }\n" +
 		"      .right { color: #1a7f37; }\n" +
 		"      .sep { color: #656d76; }\n" +
@@ -497,18 +497,29 @@ func startSideBySideHTMLReport(baseSHA, headSHA string) string {
 		"          scaleNode.style.transform = '';\n" +
 		"          pre.style.height = '';\n" +
 		"          pre.style.overflowX = 'auto';\n" +
+		"          pre.style.overflowY = 'hidden';\n" +
 		"          const available = pre.clientWidth;\n" +
 		"          const needed = scaleNode.scrollWidth;\n" +
 		"          if (!available || !needed || needed <= available) {\n" +
 		"            continue;\n" +
 		"          }\n" +
 		"          const scale = available / needed;\n" +
+		"          const minScale = 0.90;\n" +
+		"          if (scale < minScale) {\n" +
+		"            continue;\n" +
+		"          }\n" +
 		"          scaleNode.style.transform = 'scale(' + scale + ')';\n" +
 		"          pre.style.height = Math.ceil((scaleNode.scrollHeight * scale) + 24) + 'px';\n" +
 		"          pre.style.overflowX = 'hidden';\n" +
+		"          pre.style.overflowY = 'hidden';\n" +
 		"        }\n" +
 		"      }\n" +
-		"      window.addEventListener('load', fitSideBySideDiffs);\n" +
+		"      function scheduleFit() {\n" +
+		"        fitSideBySideDiffs();\n" +
+		"        window.requestAnimationFrame(fitSideBySideDiffs);\n" +
+		"        window.setTimeout(fitSideBySideDiffs, 120);\n" +
+		"      }\n" +
+		"      window.addEventListener('load', scheduleFit);\n" +
 		"      window.addEventListener('resize', fitSideBySideDiffs);\n" +
 		"    </script>\n" +
 		"  </head>\n" +
