@@ -504,7 +504,7 @@ func startSideBySideHTMLReport(baseSHA, headSHA string) string {
 		"            continue;\n" +
 		"          }\n" +
 		"          const scale = available / needed;\n" +
-		"          const minScale = 0.90;\n" +
+		"          const minScale = 1.0;\n" +
 		"          if (scale < minScale) {\n" +
 		"            continue;\n" +
 		"          }\n" +
