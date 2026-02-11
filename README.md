@@ -56,7 +56,9 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
           version: latest
           diff-format: side-by-side
+          vitrine-url: https://vitrine.octoberswimmer.com/
 ```
 
 `diff-format` defaults to `unified`; set it to `side-by-side` to render side-by-side output in the PR comment.
-When `side-by-side` is enabled, the comment also includes a link to a colored HTML report uploaded as a workflow artifact.
+When `side-by-side` is enabled, the comment includes a link to a colored HTML report.
+`vitrine-url` defaults to `https://vitrine.octoberswimmer.com/`; override it only if you host Vitrine elsewhere.

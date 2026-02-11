@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	maxDiffChars    = 12000
-	maxErrorChars   = 4000
-	maxCommentChars = 60000
-	sideBySideWidth = 200
+	maxDiffChars      = 12000
+	maxErrorChars     = 4000
+	maxCommentChars   = 60000
+	sideBySideWidth   = 200
+	sideBySideTabSize = 3
 
 	diffFormatUnified    = "unified"
 	diffFormatSideBySide = "side-by-side"
@@ -200,23 +201,27 @@ func run() error {
 		}
 		switch diffExit {
 		case 1:
+			commentDiffText := diffText
+			if resolvedDiffFormat == diffFormatSideBySide {
+				commentDiffText = suppressCommonSideBySideDiffLines(diffText)
+			}
 			if resolvedDiffFormat == diffFormatSideBySide {
 				sideBySideHTML.WriteString("    <h2>")
 				sideBySideHTML.WriteString(html.EscapeString(flowPath))
 				sideBySideHTML.WriteString("</h2>\n")
-				sideBySideHTML.WriteString("    <pre class=\"sbs\">")
+				sideBySideHTML.WriteString("    <pre class=\"sbs\"><span class=\"sbs-scale\">")
 				sideBySideHTML.WriteString(formatSideBySideDiffHTML(diffText))
-				sideBySideHTML.WriteString("</pre>\n")
+				sideBySideHTML.WriteString("</span></pre>\n")
 			}
 
-			diffText = truncateDiff(diffText)
+			commentDiffText = truncateDiff(commentDiffText)
 			if resolvedDiffFormat == diffFormatSideBySide {
 				comment.WriteString("```text\n")
 			} else {
 				comment.WriteString("```diff\n")
 			}
-			comment.WriteString(diffText)
-			if !strings.HasSuffix(diffText, "\n") {
+			comment.WriteString(commentDiffText)
+			if !strings.HasSuffix(commentDiffText, "\n") {
 				comment.WriteString("\n")
 			}
 			comment.WriteString("```\n\n")
@@ -476,10 +481,36 @@ func startSideBySideHTMLReport(baseSHA, headSHA string) string {
 		"      p { margin: 0 0 12px 0; font-size: 13px; }\n" +
 		"      code { background: #f6f8fa; border-radius: 4px; padding: 1px 4px; }\n" +
 		"      pre.sbs { margin: 0 0 16px 0; padding: 12px; overflow-x: auto; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; line-height: 1.35; }\n" +
+		"      .sbs-scale { display: inline-block; min-width: 100%; transform-origin: left top; }\n" +
 		"      .left { color: #cf222e; }\n" +
 		"      .right { color: #1a7f37; }\n" +
 		"      .sep { color: #656d76; }\n" +
 		"    </style>\n" +
+		"    <script>\n" +
+		"      function fitSideBySideDiffs() {\n" +
+		"        const blocks = document.querySelectorAll('pre.sbs');\n" +
+		"        for (const pre of blocks) {\n" +
+		"          const scaleNode = pre.querySelector('.sbs-scale');\n" +
+		"          if (!scaleNode) {\n" +
+		"            continue;\n" +
+		"          }\n" +
+		"          scaleNode.style.transform = '';\n" +
+		"          pre.style.height = '';\n" +
+		"          pre.style.overflowX = 'auto';\n" +
+		"          const available = pre.clientWidth;\n" +
+		"          const needed = scaleNode.scrollWidth;\n" +
+		"          if (!available || !needed || needed <= available) {\n" +
+		"            continue;\n" +
+		"          }\n" +
+		"          const scale = available / needed;\n" +
+		"          scaleNode.style.transform = 'scale(' + scale + ')';\n" +
+		"          pre.style.height = Math.ceil((scaleNode.scrollHeight * scale) + 24) + 'px';\n" +
+		"          pre.style.overflowX = 'hidden';\n" +
+		"        }\n" +
+		"      }\n" +
+		"      window.addEventListener('load', fitSideBySideDiffs);\n" +
+		"      window.addEventListener('resize', fitSideBySideDiffs);\n" +
+		"    </script>\n" +
 		"  </head>\n" +
 		"  <body>\n" +
 		"    <h1>flow2apex Side-By-Side Diffs</h1>\n" +
@@ -526,9 +557,9 @@ func buildSideBySideDiffCommand(workspace, baseDir, headDir string, expandTabs b
 	args := []string{
 		"--recursive",
 		"--side-by-side",
-		"--suppress-common-lines",
 		"--new-file",
 		fmt.Sprintf("--width=%d", sideBySideWidth),
+		fmt.Sprintf("--tabsize=%d", sideBySideTabSize),
 	}
 	if expandTabs {
 		args = append(args, "--expand-tabs")
@@ -621,25 +652,53 @@ func findSideBySideMarker(line string) (int, byte, bool) {
 	if len(line) == 0 {
 		return 0, 0, false
 	}
-	mid := sideBySideWidth / 2
+	mid := (sideBySideWidth / 2) - 1
+	if mid < 0 {
+		mid = 0
+	}
 	if mid >= len(line) {
-		mid = len(line) - 1
+		return 0, 0, false
 	}
-	start := mid - 4
-	if start < 0 {
-		start = 0
-	}
-	end := mid + 4
-	if end >= len(line) {
-		end = len(line) - 1
-	}
-	for i := start; i <= end; i++ {
-		switch line[i] {
-		case '|', '<', '>':
-			return i, line[i], true
+	marker := line[mid]
+	switch marker {
+	case '|', '<', '>':
+		if isLikelySideBySideMarker(line, mid, marker) {
+			return mid, marker, true
 		}
 	}
 	return 0, 0, false
+}
+
+func isLikelySideBySideMarker(line string, idx int, marker byte) bool {
+	if idx < 0 || idx >= len(line) {
+		return false
+	}
+	if idx == 0 {
+		return false
+	}
+	prev := line[idx-1]
+	if prev != ' ' && prev != '\t' {
+		return false
+	}
+	if idx+1 >= len(line) {
+		return marker == '<' || marker == '>'
+	}
+	next := line[idx+1]
+	return next == ' ' || next == '\t'
+}
+
+func suppressCommonSideBySideDiffLines(diffText string) string {
+	if diffText == "" {
+		return diffText
+	}
+	lines := strings.Split(diffText, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if _, _, ok := findSideBySideMarker(line); ok {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func truncateDiff(diffText string) string {

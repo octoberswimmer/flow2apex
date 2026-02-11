@@ -33,6 +33,10 @@ inputs:
     description: Diff format for generated Apex output (`unified` or `side-by-side`).
     required: false
     default: "unified"
+  vitrine-url:
+    description: Optional Vitrine base URL for viewing side-by-side HTML reports without downloading artifact ZIPs.
+    required: false
+    default: "https://vitrine.octoberswimmer.com/"
 
 outputs:
   has-flow-changes:
@@ -157,23 +161,40 @@ runs:
       env:
         COMMENT_FILE: ${{ steps.flowdiff.outputs.comment_file }}
         HTML_ARTIFACT_ID: ${{ steps.uploadhtml.outputs.artifact-id }}
+        HTML_FILE: ${{ steps.flowdiff.outputs.html_file }}
       with:
         github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
         script: |
           const fs = require('fs');
+          const path = require('path');
           const diffFormat = '${{ inputs.diff-format }}';
           const marker = `<!-- flow2apex-diff-comment:${diffFormat} -->`;
           const body = fs.readFileSync(process.env.COMMENT_FILE, 'utf8');
-          const artifactId = (process.env.HTML_ARTIFACT_ID || '').trim();
-          const htmlArtifactUrl = artifactId
-            ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${artifactId}`
-            : '';
-          const finalBody = htmlArtifactUrl
-            ? `${body}\n[View colored HTML side-by-side diff](${htmlArtifactUrl})\n`
-            : body;
-
           const owner = context.repo.owner;
           const repo = context.repo.repo;
+          const artifactId = (process.env.HTML_ARTIFACT_ID || '').trim();
+          const artifactFile = (process.env.HTML_FILE || '').trim()
+            ? path.basename((process.env.HTML_FILE || '').trim())
+            : 'flow2apex-pr-diff.html';
+          const vitrineBaseURL = ('${{ inputs.vitrine-url }}' || '').trim();
+          const htmlArtifactUrl = artifactId
+            ? `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${artifactId}`
+            : '';
+          let vitrineURL = '';
+          if (vitrineBaseURL !== '' && artifactId !== '') {
+            const u = new URL(vitrineBaseURL);
+            u.searchParams.set('owner', owner);
+            u.searchParams.set('repo', repo);
+            u.searchParams.set('run_id', process.env.GITHUB_RUN_ID || '');
+            u.searchParams.set('artifact_id', artifactId);
+            u.searchParams.set('file', artifactFile);
+            vitrineURL = u.toString();
+          }
+          const finalBody = htmlArtifactUrl
+            ? (vitrineURL !== ''
+              ? `${body}\n[Open Colored Side-By-Side Diff In Vitrine](${vitrineURL})\n`
+              : `${body}\n[View colored HTML side-by-side diff artifact](${htmlArtifactUrl})\n`)
+            : body;
           const issue_number = context.payload.pull_request?.number;
           if (!issue_number) {
             core.setFailed('This action can only post comments in pull_request contexts.');
