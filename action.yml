@@ -148,7 +148,8 @@ runs:
         github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
         script: |
           const fs = require('fs');
-          const marker = '<!-- flow2apex-diff-comment -->';
+          const diffFormat = '${{ inputs.diff-format }}';
+          const marker = `<!-- flow2apex-diff-comment:${diffFormat} -->`;
           const body = fs.readFileSync(process.env.COMMENT_FILE, 'utf8');
 
           const owner = context.repo.owner;
@@ -192,7 +193,8 @@ runs:
       with:
         github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
         script: |
-          const marker = '<!-- flow2apex-diff-comment -->';
+          const diffFormat = '${{ inputs.diff-format }}';
+          const marker = `<!-- flow2apex-diff-comment:${diffFormat} -->`;
           const owner = context.repo.owner;
           const repo = context.repo.repo;
           const issue_number = context.payload.pull_request?.number;
@@ -207,14 +209,14 @@ runs:
             per_page: 100,
           });
 
-          const existing = comments.find(
+          const existing = comments.filter(
             (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
           );
 
-          if (existing) {
+          for (const comment of existing) {
             await github.rest.issues.deleteComment({
               owner,
               repo,
-              comment_id: existing.id,
+              comment_id: comment.id,
             });
           }

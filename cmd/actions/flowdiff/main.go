@@ -20,6 +20,10 @@ const (
 
 	diffFormatUnified    = "unified"
 	diffFormatSideBySide = "side-by-side"
+
+	ansiRed   = "\x1b[31m"
+	ansiGreen = "\x1b[32m"
+	ansiReset = "\x1b[0m"
 )
 
 func main() {
@@ -118,7 +122,8 @@ func run() error {
 	}()
 
 	var comment strings.Builder
-	comment.WriteString("<!-- flow2apex-diff-comment -->\n")
+	comment.WriteString(diffCommentMarker(resolvedDiffFormat))
+	comment.WriteString("\n")
 	comment.WriteString("## flow2apex Flow Diffs\n\n")
 	comment.WriteString(fmt.Sprintf("Compared generated Apex between base `%s` and head `%s` for changed flow files.\n\n", baseSHA, headSHA))
 	comment.WriteString(fmt.Sprintf("Diff format: `%s`.\n\n", resolvedDiffFormat))
@@ -181,7 +186,7 @@ func run() error {
 		case 1:
 			diffText = truncateDiff(diffText)
 			if resolvedDiffFormat == diffFormatSideBySide {
-				comment.WriteString("```text\n")
+				comment.WriteString("```ansi\n")
 			} else {
 				comment.WriteString("```diff\n")
 			}
@@ -371,21 +376,15 @@ func removeWorktree(workspace, dir string) error {
 }
 
 func diffRenderedOutputs(workspace, flowPath, baseDir, headDir, diffFormat string) (int, string, error) {
-	var cmd *exec.Cmd
 	switch diffFormat {
 	case diffFormatSideBySide:
-		cmd = exec.Command(
-			"diff",
-			"--recursive",
-			"--side-by-side",
-			"--suppress-common-lines",
-			"--new-file",
-			fmt.Sprintf("--width=%d", sideBySideWidth),
-			baseDir,
-			headDir,
-		)
+		diffExit, diffText, err := diffSideBySide(workspace, flowPath, baseDir, headDir)
+		if err != nil {
+			return 2, "", err
+		}
+		return diffExit, diffText, nil
 	default:
-		cmd = exec.Command(
+		cmd := exec.Command(
 			"git",
 			"diff",
 			"--no-index",
@@ -395,24 +394,13 @@ func diffRenderedOutputs(workspace, flowPath, baseDir, headDir, diffFormat strin
 			baseDir,
 			headDir,
 		)
+		cmd.Dir = workspace
+		diffExit, diffText, _, err := runDiffCommand(cmd)
+		if err != nil {
+			return 2, "", fmt.Errorf("generate diff output: %w", err)
+		}
+		return diffExit, diffText, nil
 	}
-	cmd.Dir = workspace
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	diffText := stdout.String()
-	if diffFormat == diffFormatSideBySide {
-		diffText = rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir)
-	}
-	if err == nil {
-		return 0, diffText, nil
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode(), diffText, nil
-	}
-	return 2, "", fmt.Errorf("generate diff output: %w", err)
 }
 
 func normalizeDiffFormat(value string) (string, error) {
@@ -426,12 +414,162 @@ func normalizeDiffFormat(value string) (string, error) {
 	}
 }
 
+func diffCommentMarker(diffFormat string) string {
+	return fmt.Sprintf("<!-- flow2apex-diff-comment:%s -->", diffFormat)
+}
+
 func rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir string) string {
 	replacer := strings.NewReplacer(
 		baseDir, "a/"+flowPath,
 		headDir, "b/"+flowPath,
 	)
 	return replacer.Replace(diffText)
+}
+
+func diffSideBySide(workspace, flowPath, baseDir, headDir string) (int, string, error) {
+	type sideBySideAttempt struct {
+		expandTabs bool
+	}
+	attempts := []sideBySideAttempt{
+		{expandTabs: true},
+		{expandTabs: false},
+	}
+
+	for _, attempt := range attempts {
+		cmd := buildSideBySideDiffCommand(workspace, baseDir, headDir, attempt.expandTabs)
+		diffExit, diffText, stderrText, err := runDiffCommand(cmd)
+		if err != nil {
+			return 2, "", fmt.Errorf("generate side-by-side diff output: %w", err)
+		}
+
+		if diffExit == 2 && sideBySideOptionUnsupported(stderrText) {
+			continue
+		}
+
+		diffText = rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir)
+		diffText = removeSideBySideCommandHeaders(diffText)
+		diffText = colorizeSideBySideDiff(diffText)
+		return diffExit, diffText, nil
+	}
+
+	return 2, "", fmt.Errorf("generate side-by-side diff output: diff options are not supported")
+}
+
+func buildSideBySideDiffCommand(workspace, baseDir, headDir string, expandTabs bool) *exec.Cmd {
+	args := []string{
+		"--recursive",
+		"--side-by-side",
+		"--suppress-common-lines",
+		"--new-file",
+		fmt.Sprintf("--width=%d", sideBySideWidth),
+	}
+	if expandTabs {
+		args = append(args, "--expand-tabs")
+	}
+	args = append(args, baseDir, headDir)
+
+	cmd := exec.Command("diff", args...)
+	cmd.Dir = workspace
+	return cmd
+}
+
+func runDiffCommand(cmd *exec.Cmd) (int, string, string, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return 0, stdout.String(), stderr.String(), nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode(), stdout.String(), stderr.String(), nil
+	}
+	return 2, "", "", err
+}
+
+func sideBySideOptionUnsupported(stderrText string) bool {
+	lower := strings.ToLower(stderrText)
+	return strings.Contains(lower, "unrecognized option") ||
+		strings.Contains(lower, "illegal option") ||
+		strings.Contains(lower, "unknown option")
+}
+
+func removeSideBySideCommandHeaders(diffText string) string {
+	if diffText == "" {
+		return diffText
+	}
+	lines := strings.Split(diffText, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --recursive --side-by-side ") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func colorizeSideBySideDiff(diffText string) string {
+	if diffText == "" {
+		return diffText
+	}
+
+	lines := strings.Split(diffText, "\n")
+	for i, line := range lines {
+		lines[i] = colorizeSideBySideLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func colorizeSideBySideLine(line string) string {
+	if line == "" {
+		return line
+	}
+	markerIdx, marker, ok := findSideBySideMarker(line)
+	if !ok {
+		return line
+	}
+
+	switch marker {
+	case '|':
+		left := line[:markerIdx]
+		right := line[markerIdx+1:]
+		return ansiRed + left + ansiReset + "|" + ansiGreen + right + ansiReset
+	case '<':
+		leftWithMarker := line[:markerIdx+1]
+		return ansiRed + leftWithMarker + ansiReset + line[markerIdx+1:]
+	case '>':
+		return line[:markerIdx] + ansiGreen + line[markerIdx:] + ansiReset
+	default:
+		return line
+	}
+}
+
+func findSideBySideMarker(line string) (int, byte, bool) {
+	if len(line) == 0 {
+		return 0, 0, false
+	}
+	mid := sideBySideWidth / 2
+	if mid >= len(line) {
+		mid = len(line) - 1
+	}
+	start := mid - 4
+	if start < 0 {
+		start = 0
+	}
+	end := mid + 4
+	if end >= len(line) {
+		end = len(line) - 1
+	}
+	for i := start; i <= end; i++ {
+		switch line[i] {
+		case '|', '<', '>':
+			return i, line[i], true
+		}
+	}
+	return 0, 0, false
 }
 
 func truncateDiff(diffText string) string {
