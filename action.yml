@@ -18,9 +18,9 @@ inputs:
     required: false
     default: latest
   release-repo:
-    description: Repository that hosts flow2apex release assets (owner/name). Defaults to the action repository.
+    description: Repository that hosts flow2apex release assets (owner/name). Defaults to octoberswimmer/flow2apex.
     required: false
-    default: ""
+    default: "octoberswimmer/flow2apex"
   github-token:
     description: Token for GitHub API calls and PR comments. Defaults to github.token when omitted.
     required: false
@@ -87,10 +87,18 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
       run: |
         set -euo pipefail
+        action_repo="${{ inputs.release-repo }}"
+        if [[ -z "${action_repo}" ]]; then
+          action_repo="${GITHUB_ACTION_REPOSITORY:-}"
+        fi
+        if [[ -z "${action_repo}" ]]; then
+          action_repo="octoberswimmer/flow2apex"
+        fi
+
         go run ./resolve \
           --requested "${{ inputs.version }}" \
-          --repo "${{ inputs.release-repo }}" \
-          --fallback "${{ github.action_repository }}"
+          --repo "${action_repo}" \
+          --fallback "octoberswimmer/flow2apex"
 
     - name: Install flow2apex CLI
       if: steps.flowchanges.outputs.has_flow_changes == 'true'
