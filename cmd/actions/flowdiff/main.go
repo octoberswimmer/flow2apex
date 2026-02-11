@@ -87,6 +87,26 @@ func run() error {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	baseCheckout := filepath.Join(tmpDir, "base-checkout")
+	if err := createDetachedWorktree(workspace, baseSHA, baseCheckout); err != nil {
+		return err
+	}
+	defer func() {
+		if err := removeWorktree(workspace, baseCheckout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+	}()
+
+	headCheckout := filepath.Join(tmpDir, "head-checkout")
+	if err := createDetachedWorktree(workspace, headSHA, headCheckout); err != nil {
+		return err
+	}
+	defer func() {
+		if err := removeWorktree(workspace, headCheckout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+	}()
+
 	var comment strings.Builder
 	comment.WriteString("<!-- flow2apex-diff-comment -->\n")
 	comment.WriteString("## flow2apex Flow Diffs\n\n")
@@ -103,11 +123,11 @@ func run() error {
 			return fmt.Errorf("create head render dir: %w", err)
 		}
 
-		baseStatus, baseLog, err := renderFlow(workspace, flow2apexBin, baseSHA, flowPath, filepath.Join(tmpDir, "base-"+safe+".flow"), baseDir)
+		baseStatus, baseLog, err := renderFlow(baseCheckout, flow2apexBin, flowPath, baseDir)
 		if err != nil {
 			return err
 		}
-		headStatus, headLog, err := renderFlow(workspace, flow2apexBin, headSHA, flowPath, filepath.Join(tmpDir, "head-"+safe+".flow"), headDir)
+		headStatus, headLog, err := renderFlow(headCheckout, flow2apexBin, flowPath, headDir)
 		if err != nil {
 			return err
 		}
@@ -236,36 +256,17 @@ func resolveFlow2ApexBin(value string) (string, error) {
 	return resolved, nil
 }
 
-func gitObjectExists(workspace, sha, flowPath string) bool {
-	cmd := exec.Command("git", "cat-file", "-e", sha+":"+flowPath)
-	cmd.Dir = workspace
-	return cmd.Run() == nil
-}
-
-func gitShow(workspace, sha, flowPath string) ([]byte, error) {
-	cmd := exec.Command("git", "show", sha+":"+flowPath)
-	cmd.Dir = workspace
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("read flow contents %s (%s): %w", flowPath, sha, err)
-	}
-	return out, nil
-}
-
-func renderFlow(workspace, flow2apexBin, sha, flowPath, flowFilePath, outputDir string) (int, []byte, error) {
-	if !gitObjectExists(workspace, sha, flowPath) {
-		return 2, nil, nil
-	}
-	contents, err := gitShow(workspace, sha, flowPath)
-	if err != nil {
-		return 1, nil, err
-	}
-	if err := os.WriteFile(flowFilePath, contents, 0o644); err != nil {
-		return 1, nil, fmt.Errorf("write temp flow file: %w", err)
+func renderFlow(checkoutDir, flow2apexBin, flowPath, outputDir string) (int, []byte, error) {
+	flowFilePath := filepath.Join(checkoutDir, filepath.FromSlash(flowPath))
+	if _, err := os.Stat(flowFilePath); err != nil {
+		if os.IsNotExist(err) {
+			return 2, nil, nil
+		}
+		return 1, nil, fmt.Errorf("stat flow file %s: %w", flowPath, err)
 	}
 
 	var log bytes.Buffer
-	ok, stderr, err := runFlow2ApexToDir(workspace, flow2apexBin, flowFilePath, outputDir)
+	ok, stderr, err := runFlow2ApexToDir(checkoutDir, flow2apexBin, flowFilePath, outputDir)
 	if err != nil {
 		return 1, nil, err
 	}
@@ -274,7 +275,7 @@ func renderFlow(workspace, flow2apexBin, sha, flowPath, flowFilePath, outputDir 
 		return 0, log.Bytes(), nil
 	}
 
-	ok, stdout, stderr, err := runFlow2ApexToStdout(workspace, flow2apexBin, flowFilePath)
+	ok, stdout, stderr, err := runFlow2ApexToStdout(checkoutDir, flow2apexBin, flowFilePath)
 	if err != nil {
 		return 1, nil, err
 	}
@@ -288,9 +289,9 @@ func renderFlow(workspace, flow2apexBin, sha, flowPath, flowFilePath, outputDir 
 	return 1, log.Bytes(), nil
 }
 
-func runFlow2ApexToDir(workspace, bin, flowFile, outputDir string) (bool, []byte, error) {
+func runFlow2ApexToDir(checkoutDir, bin, flowFile, outputDir string) (bool, []byte, error) {
 	cmd := exec.Command(bin, flowFile, "-d", outputDir)
-	cmd.Dir = workspace
+	cmd.Dir = checkoutDir
 	var stderr bytes.Buffer
 	cmd.Stdout = bytes.NewBuffer(nil)
 	cmd.Stderr = &stderr
@@ -304,9 +305,9 @@ func runFlow2ApexToDir(workspace, bin, flowFile, outputDir string) (bool, []byte
 	return false, nil, fmt.Errorf("run flow2apex with output-dir: %w", err)
 }
 
-func runFlow2ApexToStdout(workspace, bin, flowFile string) (bool, []byte, []byte, error) {
+func runFlow2ApexToStdout(checkoutDir, bin, flowFile string) (bool, []byte, []byte, error) {
 	cmd := exec.Command(bin, flowFile)
-	cmd.Dir = workspace
+	cmd.Dir = checkoutDir
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -319,6 +320,39 @@ func runFlow2ApexToStdout(workspace, bin, flowFile string) (bool, []byte, []byte
 		return false, stdout.Bytes(), stderr.Bytes(), nil
 	}
 	return false, nil, nil, fmt.Errorf("run flow2apex fallback: %w", err)
+}
+
+func createDetachedWorktree(workspace, sha, dir string) error {
+	cmd := exec.Command("git", "worktree", "add", "--detach", dir, sha)
+	cmd.Dir = workspace
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("create worktree for %s: %s", sha, msg)
+		}
+		return fmt.Errorf("create worktree for %s: %w", sha, err)
+	}
+	return nil
+}
+
+func removeWorktree(workspace, dir string) error {
+	cmd := exec.Command("git", "worktree", "remove", "--force", dir)
+	cmd.Dir = workspace
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			return nil
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("remove worktree %s: %s", dir, msg)
+		}
+		return fmt.Errorf("remove worktree %s: %w", dir, err)
+	}
+	return nil
 }
 
 func diffRenderedOutputs(workspace, flowPath, baseDir, headDir string) (int, string, error) {
