@@ -55,4 +55,7 @@ jobs:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           version: latest
+          diff-format: side-by-side
 ```
+
+`diff-format` defaults to `unified`; set it to `side-by-side` to render side-by-side output in the PR comment.

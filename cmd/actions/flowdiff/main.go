@@ -16,6 +16,10 @@ const (
 	maxDiffChars    = 12000
 	maxErrorChars   = 4000
 	maxCommentChars = 60000
+	sideBySideWidth = 200
+
+	diffFormatUnified    = "unified"
+	diffFormatSideBySide = "side-by-side"
 )
 
 func main() {
@@ -32,6 +36,7 @@ func run() error {
 	var outputFile string
 	var commentFile string
 	var flow2apexBin string
+	var diffFormat string
 
 	flag.StringVar(&baseSHA, "base-sha", os.Getenv("BASE_SHA"), "base commit sha")
 	flag.StringVar(&headSHA, "head-sha", os.Getenv("HEAD_SHA"), "head commit sha")
@@ -39,6 +44,7 @@ func run() error {
 	flag.StringVar(&outputFile, "output-file", os.Getenv("GITHUB_OUTPUT"), "step output file path")
 	flag.StringVar(&commentFile, "comment-file", "", "comment markdown output path")
 	flag.StringVar(&flow2apexBin, "flow2apex-bin", os.Getenv("FLOW2APEX_BIN"), "path to flow2apex binary")
+	flag.StringVar(&diffFormat, "diff-format", os.Getenv("DIFF_FORMAT"), "diff format: unified or side-by-side")
 	flag.Parse()
 
 	if baseSHA == "" || headSHA == "" {
@@ -56,6 +62,10 @@ func run() error {
 	}
 	if commentFile == "" {
 		commentFile = filepath.Join(workspace, ".github", "flow2apex-pr-comment.md")
+	}
+	resolvedDiffFormat, err := normalizeDiffFormat(diffFormat)
+	if err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(commentFile), 0o755); err != nil {
@@ -111,6 +121,7 @@ func run() error {
 	comment.WriteString("<!-- flow2apex-diff-comment -->\n")
 	comment.WriteString("## flow2apex Flow Diffs\n\n")
 	comment.WriteString(fmt.Sprintf("Compared generated Apex between base `%s` and head `%s` for changed flow files.\n\n", baseSHA, headSHA))
+	comment.WriteString(fmt.Sprintf("Diff format: `%s`.\n\n", resolvedDiffFormat))
 
 	for _, flowPath := range flows {
 		safe := sanitizeFlowPath(flowPath)
@@ -162,14 +173,18 @@ func run() error {
 			}
 		}
 
-		diffExit, diffText, err := diffRenderedOutputs(workspace, flowPath, baseDir, headDir)
+		diffExit, diffText, err := diffRenderedOutputs(workspace, flowPath, baseDir, headDir, resolvedDiffFormat)
 		if err != nil {
 			return err
 		}
 		switch diffExit {
 		case 1:
 			diffText = truncateDiff(diffText)
-			comment.WriteString("```diff\n")
+			if resolvedDiffFormat == diffFormatSideBySide {
+				comment.WriteString("```text\n")
+			} else {
+				comment.WriteString("```diff\n")
+			}
 			comment.WriteString(diffText)
 			if !strings.HasSuffix(diffText, "\n") {
 				comment.WriteString("\n")
@@ -355,30 +370,68 @@ func removeWorktree(workspace, dir string) error {
 	return nil
 }
 
-func diffRenderedOutputs(workspace, flowPath, baseDir, headDir string) (int, string, error) {
-	cmd := exec.Command(
-		"git",
-		"diff",
-		"--no-index",
-		"--src-prefix=a/"+flowPath+"/",
-		"--dst-prefix=b/"+flowPath+"/",
-		"--",
-		baseDir,
-		headDir,
-	)
+func diffRenderedOutputs(workspace, flowPath, baseDir, headDir, diffFormat string) (int, string, error) {
+	var cmd *exec.Cmd
+	switch diffFormat {
+	case diffFormatSideBySide:
+		cmd = exec.Command(
+			"diff",
+			"--recursive",
+			"--side-by-side",
+			"--suppress-common-lines",
+			"--new-file",
+			fmt.Sprintf("--width=%d", sideBySideWidth),
+			baseDir,
+			headDir,
+		)
+	default:
+		cmd = exec.Command(
+			"git",
+			"diff",
+			"--no-index",
+			"--src-prefix=a/"+flowPath+"/",
+			"--dst-prefix=b/"+flowPath+"/",
+			"--",
+			baseDir,
+			headDir,
+		)
+	}
 	cmd.Dir = workspace
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	diffText := stdout.String()
+	if diffFormat == diffFormatSideBySide {
+		diffText = rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir)
+	}
 	if err == nil {
-		return 0, stdout.String(), nil
+		return 0, diffText, nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode(), stdout.String(), nil
+		return exitErr.ExitCode(), diffText, nil
 	}
 	return 2, "", fmt.Errorf("generate diff output: %w", err)
+}
+
+func normalizeDiffFormat(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", diffFormatUnified:
+		return diffFormatUnified, nil
+	case diffFormatSideBySide:
+		return diffFormatSideBySide, nil
+	default:
+		return "", fmt.Errorf("invalid diff-format %q (expected %q or %q)", value, diffFormatUnified, diffFormatSideBySide)
+	}
+}
+
+func rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir string) string {
+	replacer := strings.NewReplacer(
+		baseDir, "a/"+flowPath,
+		headDir, "b/"+flowPath,
+	)
+	return replacer.Replace(diffText)
 }
 
 func truncateDiff(diffText string) string {

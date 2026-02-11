@@ -29,6 +29,10 @@ inputs:
     description: Whether to upsert a PR comment with the generated diff report.
     required: false
     default: "true"
+  diff-format:
+    description: Diff format for generated Apex output (`unified` or `side-by-side`).
+    required: false
+    default: "unified"
 
 outputs:
   has-flow-changes:
@@ -132,7 +136,8 @@ runs:
           --base-sha "$BASE_SHA" \
           --head-sha "$HEAD_SHA" \
           --workspace "$GITHUB_WORKSPACE" \
-          --flow2apex-bin "$FLOW2APEX_BIN"
+          --flow2apex-bin "$FLOW2APEX_BIN" \
+          --diff-format "${{ inputs.diff-format }}"
 
     - name: Upsert flow diff comment
       if: inputs.post-comment == 'true' && steps.flowchanges.outputs.has_flow_changes == 'true'
