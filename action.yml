@@ -1,0 +1,207 @@
+name: Flow2Apex PR Diff
+
+description: Detect changed Salesforce Flow metadata files in a pull request, generate flow2apex old/new diffs, and post them to the pull request.
+author: October Swimmer
+branding:
+  color: blue
+  icon: git-pull-request
+
+inputs:
+  base-sha:
+    description: Base commit SHA for the PR comparison.
+    required: true
+  head-sha:
+    description: Head commit SHA for the PR comparison.
+    required: true
+  version:
+    description: flow2apex release tag to install (for example `v0.2.0`). Use `latest` to resolve dynamically.
+    required: false
+    default: latest
+  release-repo:
+    description: Repository that hosts flow2apex release assets (owner/name). Defaults to the action repository.
+    required: false
+    default: ""
+  github-token:
+    description: Token for GitHub API calls and PR comments. Defaults to github.token when omitted.
+    required: false
+    default: ""
+  post-comment:
+    description: Whether to upsert a PR comment with the generated diff report.
+    required: false
+    default: "true"
+
+outputs:
+  has-flow-changes:
+    description: Whether any `.flow` or `.flow-meta.xml` files changed in the PR.
+    value: ${{ steps.flowchanges.outputs.has_flow_changes }}
+  comment-file:
+    description: Path to the generated markdown report file.
+    value: ${{ steps.flowchanges.outputs.comment_file }}
+  flow2apex-version:
+    description: Resolved flow2apex release tag used for conversion.
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22.x'
+        cache: false
+
+    - name: Detect changed flow files
+      id: flowchanges
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+
+        comment_file="${GITHUB_WORKSPACE}/.github/flow2apex-pr-comment.md"
+        echo "comment_file=${comment_file}" >> "$GITHUB_OUTPUT"
+
+        if ! git rev-parse --verify "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+          echo "Base SHA ${BASE_SHA} is not present locally. Ensure checkout uses fetch-depth: 0." >&2
+          exit 1
+        fi
+        if ! git rev-parse --verify "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+          echo "Head SHA ${HEAD_SHA} is not present locally. Ensure checkout uses fetch-depth: 0." >&2
+          exit 1
+        fi
+
+        if git diff --name-only --no-renames --diff-filter=ACMRD "$BASE_SHA" "$HEAD_SHA" | grep -Eq '\.flow(-meta\.xml)?$'; then
+          echo "has_flow_changes=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_flow_changes=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Resolve release tag
+      if: steps.flowchanges.outputs.has_flow_changes == 'true'
+      id: resolve
+      shell: bash
+      working-directory: ${{ github.action_path }}/cmd/actions
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+      run: |
+        set -euo pipefail
+        go run ./resolve \
+          --requested "${{ inputs.version }}" \
+          --repo "${{ inputs.release-repo }}" \
+          --fallback "${{ github.action_repository }}"
+
+    - name: Install flow2apex CLI
+      if: steps.flowchanges.outputs.has_flow_changes == 'true'
+      id: install
+      shell: bash
+      working-directory: ${{ github.action_path }}/cmd/actions
+      env:
+        RUNNER_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        go run ./install \
+          --repo "${{ steps.resolve.outputs.repo }}" \
+          --version "${{ steps.resolve.outputs.version }}" \
+          --runner-os "${{ runner.os }}" \
+          --runner-arch "${{ runner.arch }}" \
+          --dest "${RUNNER_TEMP}/flow2apex"
+
+    - name: Generate flow2apex diff report
+      if: steps.flowchanges.outputs.has_flow_changes == 'true'
+      id: flowdiff
+      shell: bash
+      working-directory: ${{ github.action_path }}/cmd/actions
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        FLOW2APEX_BIN: ${{ steps.install.outputs.binary }}
+      run: |
+        set -euo pipefail
+        go run ./flowdiff \
+          --base-sha "$BASE_SHA" \
+          --head-sha "$HEAD_SHA" \
+          --workspace "$GITHUB_WORKSPACE" \
+          --flow2apex-bin "$FLOW2APEX_BIN"
+
+    - name: Upsert flow diff comment
+      if: inputs.post-comment == 'true' && steps.flowchanges.outputs.has_flow_changes == 'true'
+      uses: actions/github-script@v7
+      env:
+        COMMENT_FILE: ${{ steps.flowdiff.outputs.comment_file }}
+      with:
+        github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- flow2apex-diff-comment -->';
+          const body = fs.readFileSync(process.env.COMMENT_FILE, 'utf8');
+
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issue_number = context.payload.pull_request?.number;
+          if (!issue_number) {
+            core.setFailed('This action can only post comments in pull_request contexts.');
+            return;
+          }
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number,
+            per_page: 100,
+          });
+
+          const existing = comments.find(
+            (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+          }
+
+    - name: Remove stale flow diff comment
+      if: inputs.post-comment == 'true' && steps.flowchanges.outputs.has_flow_changes != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+        script: |
+          const marker = '<!-- flow2apex-diff-comment -->';
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issue_number = context.payload.pull_request?.number;
+          if (!issue_number) {
+            return;
+          }
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number,
+            per_page: 100,
+          });
+
+          const existing = comments.find(
+            (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+          );
+
+          if (existing) {
+            await github.rest.issues.deleteComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+            });
+          }

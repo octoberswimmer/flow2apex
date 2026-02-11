@@ -23,3 +23,36 @@ flow2apex path/to/MySubflow.flow-meta.xml -d src/
 - Record-triggered flows generate an Apex trigger.
 - Scheduled flows generate a trigger and Queueable class (requires `-d`).
 - Auto-launched sub-flows generate an invocable Apex class.
+
+## Reusable GitHub Action
+
+This repository also provides a reusable composite action (`action.yml`) for pull request flow diff comments.
+By default, it installs the latest published `flow2apex` release.
+
+Example usage in another repository:
+
+```yaml
+name: Flow2Apex Diff
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  flow2apex-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: octoberswimmer/flow2apex@v0.2.0
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          version: latest
+```
