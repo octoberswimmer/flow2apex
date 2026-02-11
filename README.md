@@ -59,3 +59,4 @@ jobs:
 ```
 
 `diff-format` defaults to `unified`; set it to `side-by-side` to render side-by-side output in the PR comment.
+When `side-by-side` is enabled, the comment also includes a link to a colored HTML report uploaded as a workflow artifact.

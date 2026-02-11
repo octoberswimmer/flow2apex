@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,10 +21,6 @@ const (
 
 	diffFormatUnified    = "unified"
 	diffFormatSideBySide = "side-by-side"
-
-	ansiRed   = "\x1b[31m"
-	ansiGreen = "\x1b[32m"
-	ansiReset = "\x1b[0m"
 )
 
 func main() {
@@ -39,6 +36,7 @@ func run() error {
 	var workspace string
 	var outputFile string
 	var commentFile string
+	var htmlFile string
 	var flow2apexBin string
 	var diffFormat string
 
@@ -47,6 +45,7 @@ func run() error {
 	flag.StringVar(&workspace, "workspace", os.Getenv("GITHUB_WORKSPACE"), "workspace path")
 	flag.StringVar(&outputFile, "output-file", os.Getenv("GITHUB_OUTPUT"), "step output file path")
 	flag.StringVar(&commentFile, "comment-file", "", "comment markdown output path")
+	flag.StringVar(&htmlFile, "html-file", "", "side-by-side html output path")
 	flag.StringVar(&flow2apexBin, "flow2apex-bin", os.Getenv("FLOW2APEX_BIN"), "path to flow2apex binary")
 	flag.StringVar(&diffFormat, "diff-format", os.Getenv("DIFF_FORMAT"), "diff format: unified or side-by-side")
 	flag.Parse()
@@ -67,13 +66,24 @@ func run() error {
 	if commentFile == "" {
 		commentFile = filepath.Join(workspace, ".github", "flow2apex-pr-comment.md")
 	}
+	if htmlFile == "" {
+		htmlFile = filepath.Join(workspace, ".github", "flow2apex-pr-diff.html")
+	}
 	resolvedDiffFormat, err := normalizeDiffFormat(diffFormat)
 	if err != nil {
 		return err
 	}
 
+	htmlFileOutput := ""
+	if resolvedDiffFormat == diffFormatSideBySide {
+		htmlFileOutput = htmlFile
+	}
+
 	if err := os.MkdirAll(filepath.Dir(commentFile), 0o755); err != nil {
 		return fmt.Errorf("create comment directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(htmlFile), 0o755); err != nil {
+		return fmt.Errorf("create html directory: %w", err)
 	}
 
 	flows, err := detectChangedFlows(workspace, baseSHA, headSHA)
@@ -87,6 +97,7 @@ func run() error {
 		return appendOutputs(outputFile, []outputKV{
 			{Key: "has_flow_changes", Value: "false"},
 			{Key: "comment_file", Value: commentFile},
+			{Key: "html_file", Value: htmlFileOutput},
 		})
 	}
 
@@ -127,6 +138,11 @@ func run() error {
 	comment.WriteString("## flow2apex Flow Diffs\n\n")
 	comment.WriteString(fmt.Sprintf("Compared generated Apex between base `%s` and head `%s` for changed flow files.\n\n", baseSHA, headSHA))
 	comment.WriteString(fmt.Sprintf("Diff format: `%s`.\n\n", resolvedDiffFormat))
+
+	var sideBySideHTML strings.Builder
+	if resolvedDiffFormat == diffFormatSideBySide {
+		sideBySideHTML.WriteString(startSideBySideHTMLReport(baseSHA, headSHA))
+	}
 
 	for _, flowPath := range flows {
 		safe := sanitizeFlowPath(flowPath)
@@ -184,9 +200,18 @@ func run() error {
 		}
 		switch diffExit {
 		case 1:
+			if resolvedDiffFormat == diffFormatSideBySide {
+				sideBySideHTML.WriteString("    <h2>")
+				sideBySideHTML.WriteString(html.EscapeString(flowPath))
+				sideBySideHTML.WriteString("</h2>\n")
+				sideBySideHTML.WriteString("    <pre class=\"sbs\">")
+				sideBySideHTML.WriteString(formatSideBySideDiffHTML(diffText))
+				sideBySideHTML.WriteString("</pre>\n")
+			}
+
 			diffText = truncateDiff(diffText)
 			if resolvedDiffFormat == diffFormatSideBySide {
-				comment.WriteString("```ansi\n")
+				comment.WriteString("```text\n")
 			} else {
 				comment.WriteString("```diff\n")
 			}
@@ -197,8 +222,20 @@ func run() error {
 			comment.WriteString("```\n\n")
 		case 0:
 			comment.WriteString("No generated Apex differences.\n\n")
+			if resolvedDiffFormat == diffFormatSideBySide {
+				sideBySideHTML.WriteString("    <h2>")
+				sideBySideHTML.WriteString(html.EscapeString(flowPath))
+				sideBySideHTML.WriteString("</h2>\n")
+				sideBySideHTML.WriteString("    <p>No generated Apex differences.</p>\n")
+			}
 		default:
 			comment.WriteString("Failed to generate diff output.\n\n")
+			if resolvedDiffFormat == diffFormatSideBySide {
+				sideBySideHTML.WriteString("    <h2>")
+				sideBySideHTML.WriteString(html.EscapeString(flowPath))
+				sideBySideHTML.WriteString("</h2>\n")
+				sideBySideHTML.WriteString("    <p>Failed to generate diff output.</p>\n")
+			}
 		}
 	}
 
@@ -209,10 +246,17 @@ func run() error {
 	if err := os.WriteFile(commentFile, []byte(commentBody), 0o644); err != nil {
 		return fmt.Errorf("write comment file: %w", err)
 	}
+	if resolvedDiffFormat == diffFormatSideBySide {
+		sideBySideHTML.WriteString("  </body>\n</html>\n")
+		if err := os.WriteFile(htmlFile, []byte(sideBySideHTML.String()), 0o644); err != nil {
+			return fmt.Errorf("write html file: %w", err)
+		}
+	}
 
 	return appendOutputs(outputFile, []outputKV{
 		{Key: "has_flow_changes", Value: "true"},
 		{Key: "comment_file", Value: commentFile},
+		{Key: "html_file", Value: htmlFileOutput},
 	})
 }
 
@@ -418,6 +462,30 @@ func diffCommentMarker(diffFormat string) string {
 	return fmt.Sprintf("<!-- flow2apex-diff-comment:%s -->", diffFormat)
 }
 
+func startSideBySideHTMLReport(baseSHA, headSHA string) string {
+	return "<!doctype html>\n<html lang=\"en\">\n" +
+		"  <head>\n" +
+		"    <meta charset=\"utf-8\" />\n" +
+		"    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+		"    <title>flow2apex Side-By-Side Diff</title>\n" +
+		"    <style>\n" +
+		"      :root { color-scheme: light; }\n" +
+		"      body { margin: 24px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace; color: #1f2328; background: #ffffff; }\n" +
+		"      h1 { margin: 0 0 12px 0; font-size: 22px; }\n" +
+		"      h2 { margin: 24px 0 8px 0; font-size: 16px; }\n" +
+		"      p { margin: 0 0 12px 0; font-size: 13px; }\n" +
+		"      code { background: #f6f8fa; border-radius: 4px; padding: 1px 4px; }\n" +
+		"      pre.sbs { margin: 0 0 16px 0; padding: 12px; overflow-x: auto; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; line-height: 1.35; }\n" +
+		"      .left { color: #cf222e; }\n" +
+		"      .right { color: #1a7f37; }\n" +
+		"      .sep { color: #656d76; }\n" +
+		"    </style>\n" +
+		"  </head>\n" +
+		"  <body>\n" +
+		"    <h1>flow2apex Side-By-Side Diffs</h1>\n" +
+		"    <p>Compared generated Apex between base <code>" + html.EscapeString(baseSHA) + "</code> and head <code>" + html.EscapeString(headSHA) + "</code>.</p>\n"
+}
+
 func rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir string) string {
 	replacer := strings.NewReplacer(
 		baseDir, "a/"+flowPath,
@@ -448,7 +516,6 @@ func diffSideBySide(workspace, flowPath, baseDir, headDir string) (int, string, 
 
 		diffText = rewriteSideBySideDiffPaths(diffText, flowPath, baseDir, headDir)
 		diffText = removeSideBySideCommandHeaders(diffText)
-		diffText = colorizeSideBySideDiff(diffText)
 		return diffExit, diffText, nil
 	}
 
@@ -511,39 +578,42 @@ func removeSideBySideCommandHeaders(diffText string) string {
 	return strings.Join(out, "\n")
 }
 
-func colorizeSideBySideDiff(diffText string) string {
+func formatSideBySideDiffHTML(diffText string) string {
 	if diffText == "" {
-		return diffText
+		return ""
 	}
-
 	lines := strings.Split(diffText, "\n")
-	for i, line := range lines {
-		lines[i] = colorizeSideBySideLine(line)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, formatSideBySideDiffHTMLLine(line))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n")
 }
 
-func colorizeSideBySideLine(line string) string {
+func formatSideBySideDiffHTMLLine(line string) string {
 	if line == "" {
-		return line
+		return ""
 	}
 	markerIdx, marker, ok := findSideBySideMarker(line)
 	if !ok {
-		return line
+		return html.EscapeString(line)
 	}
 
 	switch marker {
 	case '|':
-		left := line[:markerIdx]
-		right := line[markerIdx+1:]
-		return ansiRed + left + ansiReset + "|" + ansiGreen + right + ansiReset
+		left := html.EscapeString(line[:markerIdx])
+		right := html.EscapeString(line[markerIdx+1:])
+		return "<span class=\"left\">" + left + "</span><span class=\"sep\">|</span><span class=\"right\">" + right + "</span>"
 	case '<':
-		leftWithMarker := line[:markerIdx+1]
-		return ansiRed + leftWithMarker + ansiReset + line[markerIdx+1:]
+		leftWithMarker := html.EscapeString(line[:markerIdx+1])
+		right := html.EscapeString(line[markerIdx+1:])
+		return "<span class=\"left\">" + leftWithMarker + "</span>" + right
 	case '>':
-		return line[:markerIdx] + ansiGreen + line[markerIdx:] + ansiReset
+		left := html.EscapeString(line[:markerIdx])
+		rightWithMarker := html.EscapeString(line[markerIdx:])
+		return left + "<span class=\"right\">" + rightWithMarker + "</span>"
 	default:
-		return line
+		return html.EscapeString(line)
 	}
 }
 
