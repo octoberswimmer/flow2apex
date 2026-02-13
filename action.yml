@@ -94,7 +94,7 @@ runs:
         fi
 
     - name: Resolve release tag
-      if: steps.flowchanges.outputs.has_flow_changes == 'true'
+      if: steps.flowchanges.outputs.has_flow_changes == 'true' || inputs.commit-generated-apex-path != ''
       id: resolve
       shell: bash
       working-directory: ${{ github.action_path }}/cmd/actions
@@ -116,7 +116,7 @@ runs:
           --fallback "octoberswimmer/flow2apex"
 
     - name: Install flow2apex CLI
-      if: steps.flowchanges.outputs.has_flow_changes == 'true'
+      if: steps.flowchanges.outputs.has_flow_changes == 'true' || inputs.commit-generated-apex-path != ''
       id: install
       shell: bash
       working-directory: ${{ github.action_path }}/cmd/actions
@@ -160,10 +160,9 @@ runs:
         if-no-files-found: error
 
     - name: Generate and commit Apex output
-      if: steps.flowchanges.outputs.has_flow_changes == 'true' && inputs.commit-generated-apex-path != ''
+      if: inputs.commit-generated-apex-path != ''
       shell: bash
       env:
-        BASE_SHA: ${{ inputs.base-sha }}
         HEAD_SHA: ${{ inputs.head-sha }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
         FLOW2APEX_BIN: ${{ steps.install.outputs.binary }}

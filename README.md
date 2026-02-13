@@ -72,7 +72,7 @@ If you set `commit-generated-apex-path`:
 - workflow `permissions.contents` must be `write`
 - `actions/checkout` must keep credentials (default behavior) so the push can authenticate
 
-To keep generated Apex committed on branch updates (including fork branches) before PR runs, run the action on both `push` and `pull_request`:
+To keep generated Apex committed on branch updates (including fork branches) and support manual backfill runs, run the action on `push`, `pull_request`, and `workflow_dispatch`:
 
 ```yaml
 name: Flow2Apex Diff
@@ -83,6 +83,7 @@ on:
       - '**'
   pull_request:
     types: [opened, reopened, synchronize]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -98,7 +99,7 @@ jobs:
 
       - uses: octoberswimmer/flow2apex@main
         with:
-          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
           head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           version: latest
           diff-format: side-by-side
@@ -107,4 +108,4 @@ jobs:
           post-comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
 ```
 
-With this pattern, branch update runs commit generated Apex as needed, and PR runs usually have no generated Apex changes left to commit.
+With this pattern, branch update runs commit generated Apex as needed, PR runs usually have no generated Apex changes left to commit, and manual runs against a selected branch can backfill any missing generated Apex files.
