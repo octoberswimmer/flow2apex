@@ -1,6 +1,6 @@
 name: Flow2Apex PR Diff
 
-description: Detect changed Salesforce Flow metadata files in a pull request, generate flow2apex old/new diffs, and post them to the pull request.
+description: Detect changed Salesforce Flow metadata files in a pull request, generate flow2apex old/new diffs, post them to the pull request, and optionally commit generated Apex files.
 author: October Swimmer
 branding:
   color: blue
@@ -37,6 +37,10 @@ inputs:
     description: Optional Vitrine base URL for viewing side-by-side HTML reports without downloading artifact ZIPs.
     required: false
     default: "https://vitrine.octoberswimmer.com/"
+  commit-generated-apex-path:
+    description: Optional repository-relative directory where generated Apex files should be written and committed.
+    required: false
+    default: ""
 
 outputs:
   has-flow-changes:
@@ -155,6 +159,108 @@ runs:
         path: ${{ steps.flowdiff.outputs.html_file }}
         if-no-files-found: error
 
+    - name: Generate and commit Apex output
+      if: steps.flowchanges.outputs.has_flow_changes == 'true' && inputs.commit-generated-apex-path != ''
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        FLOW2APEX_BIN: ${{ steps.install.outputs.binary }}
+        GENERATED_APEX_PATH: ${{ inputs.commit-generated-apex-path }}
+        GITHUB_HEAD_REF: ${{ github.head_ref }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+
+        target_rel="${GENERATED_APEX_PATH#./}"
+        if [[ -z "${target_rel}" ]]; then
+          echo "commit-generated-apex-path cannot be empty when provided." >&2
+          exit 1
+        fi
+        if [[ "${target_rel}" = /* ]]; then
+          echo "commit-generated-apex-path must be relative to the repository root." >&2
+          exit 1
+        fi
+        if [[ "${target_rel}" == ".." || "${target_rel}" == ../* || "${target_rel}" == */.. || "${target_rel}" == */../* ]]; then
+          echo "commit-generated-apex-path cannot escape the repository root." >&2
+          exit 1
+        fi
+        target_dir="${GITHUB_WORKSPACE}/${target_rel}"
+        mkdir -p "${target_dir}"
+
+        mapfile -t flows < <(git ls-files | grep -E '\.flow(-meta\.xml)?$' || true)
+        if [[ "${#flows[@]}" -eq 0 ]]; then
+          echo "No tracked flow files found; skipping generated Apex commit."
+          exit 0
+        fi
+
+        # Ensure generated output is produced from the exact head commit for this action invocation.
+        git checkout --quiet "$HEAD_SHA"
+
+        sanitize_flow_path() {
+          local in="$1"
+          in="${in//\//_}"
+          in="${in// /_}"
+          in="${in//:/_}"
+          in="${in//$'\t'/_}"
+          in="${in//$'\n'/_}"
+          echo "$in"
+        }
+
+        rendered_any="false"
+        for flow in "${flows[@]}"; do
+          flow_file="${GITHUB_WORKSPACE}/${flow}"
+          if [[ ! -f "${flow_file}" ]]; then
+            continue
+          fi
+
+          if "${FLOW2APEX_BIN}" "${flow_file}" -d "${target_dir}"; then
+            rendered_any="true"
+            continue
+          fi
+
+          stdout_tmp="$(mktemp)"
+          stderr_tmp="$(mktemp)"
+          if "${FLOW2APEX_BIN}" "${flow_file}" >"${stdout_tmp}" 2>"${stderr_tmp}"; then
+            safe_name="$(sanitize_flow_path "${flow}")"
+            mv "${stdout_tmp}" "${target_dir}/${safe_name}.generated.apex"
+            rm -f "${stderr_tmp}"
+            rendered_any="true"
+            continue
+          fi
+
+          cat "${stderr_tmp}" >&2
+          rm -f "${stdout_tmp}" "${stderr_tmp}"
+          echo "flow2apex conversion failed for ${flow}" >&2
+          exit 1
+        done
+
+        if [[ "${rendered_any}" != "true" ]]; then
+          echo "No head flow files were rendered; skipping generated Apex commit."
+          exit 0
+        fi
+
+        git add -- "${target_rel}"
+        if git diff --cached --quiet -- "${target_rel}"; then
+          echo "Generated Apex output is unchanged; no commit created."
+          exit 0
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git commit -m "Update Generated Apex Output"
+
+        target_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
+        if [[ -z "${target_branch}" || "${target_branch}" == "HEAD" ]]; then
+          target_branch="$(git rev-parse --abbrev-ref HEAD)"
+        fi
+        if [[ -z "${target_branch}" || "${target_branch}" == "HEAD" ]]; then
+          echo "Unable to determine target branch for push." >&2
+          exit 1
+        fi
+        git push origin "HEAD:${target_branch}"
+
     - name: Upsert flow diff comment
       if: inputs.post-comment == 'true' && steps.flowchanges.outputs.has_flow_changes == 'true'
       uses: actions/github-script@v7
@@ -197,7 +303,7 @@ runs:
             : body;
           const issue_number = context.payload.pull_request?.number;
           if (!issue_number) {
-            core.setFailed('This action can only post comments in pull_request contexts.');
+            core.info('No pull_request context detected; skipping PR comment upsert.');
             return;
           }
 
