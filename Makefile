@@ -3,11 +3,12 @@ SHELL := /bin/bash
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 EXECUTABLE := flow2apex
 WINDOWS := $(EXECUTABLE)_windows_amd64.exe
+WINDOWS_ARM64 := $(EXECUTABLE)_windows_arm64.exe
 LINUX := $(EXECUTABLE)_linux_amd64
 LINUX_ARM64 := $(EXECUTABLE)_linux_arm64
 DARWIN_AMD64 := $(EXECUTABLE)_darwin_amd64
 DARWIN_ARM64 := $(EXECUTABLE)_darwin_arm64
-ALL := $(WINDOWS) $(LINUX) $(LINUX_ARM64) $(DARWIN_AMD64) $(DARWIN_ARM64)
+ALL := $(WINDOWS) $(WINDOWS_ARM64) $(LINUX) $(LINUX_ARM64) $(DARWIN_AMD64) $(DARWIN_ARM64)
 VERSIONED_ZIPS := $(addsuffix _$(VERSION).zip,$(basename $(ALL)))
 RELEASE_ASSETS := $(VERSIONED_ZIPS) SHA256SUMS-$(VERSION)
 
@@ -28,6 +29,9 @@ install-debug:
 $(WINDOWS): go.mod
 	env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" -o $@
 
+$(WINDOWS_ARM64): go.mod
+	env CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" -o $@
+
 $(LINUX): go.mod
 	env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" -o $@
 
@@ -43,6 +47,11 @@ $(DARWIN_ARM64): go.mod
 	rcodesign sign --for-notarization --pem-file <(pass OctoberSwimmer/aer/codesign/combined) $@
 
 $(basename $(WINDOWS))_$(VERSION).zip: $(WINDOWS)
+	@rm -f $@
+	zip $@ $<
+	7za rn $@ $< $(EXECUTABLE).exe
+
+$(basename $(WINDOWS_ARM64))_$(VERSION).zip: $(WINDOWS_ARM64)
 	@rm -f $@
 	zip $@ $<
 	7za rn $@ $< $(EXECUTABLE).exe
