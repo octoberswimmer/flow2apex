@@ -2,12 +2,12 @@ module github.com/octoberswimmer/flow2apex
 
 go 1.25.5
 
-require github.com/octoberswimmer/aer v0.0.121
+require github.com/octoberswimmer/aer v1.2.3
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
-	github.com/ForceCLI/force v1.8.0 // indirect
-	github.com/ForceCLI/force-md v0.35.0 // indirect
+	github.com/ForceCLI/force v1.9.0 // indirect
+	github.com/ForceCLI/force-md v0.44.0 // indirect
 	github.com/ForceCLI/inflect v0.0.0-20130829110746-cc00b5ad7a6a // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
@@ -20,9 +20,9 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
-	github.com/nbio/xml v0.0.0-20251016084110-a619c1115f34 // indirect
+	github.com/nbio/xml v0.0.0-20260302224236-9f64bb3b5a9e // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
-	github.com/octoberswimmer/apexfmt v0.50.0 // indirect
+	github.com/octoberswimmer/apexfmt v0.56.1 // indirect
 	github.com/octoberswimmer/sformula v0.12.0 // indirect
 	github.com/onsi/ginkgo v1.13.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
